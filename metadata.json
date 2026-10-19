@@ -1,0 +1,7 @@
+{
+  "name": "YASH: Physician Portal",
+  "description": "A professional, high-performance portal for physicians to manage patient records, diagnostics, and clinical workflows with a modern, responsive interface.",
+  "requestFramePermissions": [
+    "microphone"
+  ]
+}
