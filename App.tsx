@@ -9,6 +9,9 @@ import DiagnosisView from './components/DiagnosisView';
 import AgendaView from './components/AgendaView';
 import Login from './components/Login';
 import PatientData from './components/PatientData';
+import ProfileView from './components/ProfileView';
+import { sapAuthService } from './services/sapAuthService';
+import { physicianProfileService } from './services/physicianProfileService';
 import { Calendar, List, Info, ChevronRight, Activity, MapPin, Clock, Award, BookOpen, User, UserPlus, Search, Stethoscope, Mail, Phone, ExternalLink, HeartPulse, Settings, Bed, Filter, AlertCircle, CheckCircle, ArrowLeft } from 'lucide-react';
 
 const calculateAge = (dob: string) => {
@@ -22,8 +25,13 @@ const calculateAge = (dob: string) => {
 };
 
 const App: React.FC = () => {
-  const [isAuthenticated, setIsAuthenticated] = useState(false);
-  const [currentUser, setCurrentUser] = useState<string | null>(null);
+  const [isAuthenticated, setIsAuthenticated] = useState(() => sapAuthService.isAuthenticated());
+  const [currentUser, setCurrentUser] = useState<string | null>(() => {
+    const session = sapAuthService.getSession();
+    // Use the raw SAP username (not displayName) so it matches what is stored in SAP.
+    // displayName is for UI display only and may contain prefixes like "Dr.".
+    return session ? session.username : null;
+  });
   const [activeView, setActiveView] = useState<ViewType>(ViewType.DASHBOARD);
   const [previousView, setPreviousView] = useState<ViewType>(ViewType.DASHBOARD);
   const [selectedPatient, setSelectedPatient] = useState<Patient | null>(MOCK_PATIENTS[0]);
@@ -41,8 +49,20 @@ const App: React.FC = () => {
     }
   }, [selectedPatient?.id]);
 
-  const handleLogin = (user: string) => { setCurrentUser(user); setIsAuthenticated(true); };
-  const handleLogout = () => { setIsAuthenticated(false); setCurrentUser(null); setActiveView(ViewType.DASHBOARD); };
+  const handleLogin = (user: string) => { 
+    setCurrentUser(user); 
+    setIsAuthenticated(true);
+    // fetchProfile with no argument — it reads session.username internally,
+    // which is the raw SAP user ID (e.g. "JOHN"), not the display name.
+    physicianProfileService.fetchProfile();
+  };
+  const handleLogout = () => { 
+    sapAuthService.logout();
+    physicianProfileService.clearProfile();
+    setIsAuthenticated(false); 
+    setCurrentUser(null); 
+    setActiveView(ViewType.DASHBOARD); 
+  };
 
   if (!isAuthenticated) return <Login onLogin={handleLogin} />;
 
@@ -236,6 +256,7 @@ const App: React.FC = () => {
       selectedCaseNumber={selectedCaseNumber}
       onCaseChange={setSelectedCaseNumber}
       patientCases={selectedPatient ? getPatientCases(selectedPatient) : []}
+      currentUser={currentUser}
     >
       {renderContent()}
     </Layout>
@@ -407,58 +428,6 @@ const DoctorsView = ({ doctors }: { doctors: Doctor[] }) => {
             <p className="text-sm font-semibold text-slate-300 uppercase tracking-widest">No staff members match your criteria</p>
           </div>
         )}
-      </div>
-    </div>
-  );
-};
-
-/* --- PROFILE VIEW --- */
-
-const ProfileView = () => {
-  return (
-    <div className="max-w-4xl mx-auto space-y-12 animate-in fade-in duration-500">
-      <div className="bg-slate-900 p-12 rounded-[3rem] text-white flex flex-col md:flex-row items-center gap-12 border-b-8 border-slate-800 shadow-2xl relative overflow-hidden">
-        <div className="absolute top-0 right-0 p-16 opacity-5 scale-150">
-           <HeartPulse size={120} />
-        </div>
-        <img src="https://picsum.photos/seed/doc/200/200" className="w-48 h-48 rounded-[3rem] border-4 border-slate-800 shadow-2xl relative z-10" alt="Dr. Connor" />
-        <div className="text-center md:text-left relative z-10">
-          <h2 className="text-5xl font-semibold tracking-tighter leading-none">Dr. Sarah Connor</h2>
-          <div className="text-orange-400 text-xs font-semibold uppercase tracking-[0.4em] mt-4">Consultant Cardiologist & Chief of Cardiology</div>
-            <div className="flex flex-wrap gap-5 mt-10 justify-center md:justify-start">
-              <div className="flex items-center gap-3 bg-white/10 backdrop-blur-md px-6 py-3 rounded-2xl text-[10px] font-semibold uppercase tracking-widest border border-white/10"><Phone size={16} className="text-blue-400" /> Ext: 3412</div>
-              <div className="flex items-center gap-3 bg-white/10 backdrop-blur-md px-6 py-3 rounded-2xl text-[10px] font-semibold uppercase tracking-widest border border-white/10"><Mail size={16} className="text-blue-400" /> s.connor@physicianportal.md</div>
-            </div>
-        </div>
-      </div>
-      
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
-        <div className="bg-white p-10 rounded-[3rem] border border-slate-200 shadow-xl shadow-slate-200/5">
-           <h3 className="text-sm font-semibold text-slate-800 uppercase tracking-widest mb-8 flex items-center gap-3"><Award size={20} className="text-blue-600" /> Professional Credentials</h3>
-           <div className="space-y-6">
-              <div className="flex gap-5">
-                 <div className="w-1.5 h-1.5 rounded-full bg-blue-600 mt-2"></div>
-                 <div className="text-xs font-bold text-slate-600 leading-relaxed">MD, Harvard Medical School - Fellowship in Structural Heart Disease</div>
-              </div>
-              <div className="flex gap-5">
-                 <div className="w-1.5 h-1.5 rounded-full bg-blue-600 mt-2"></div>
-                 <div className="text-xs font-bold text-slate-600 leading-relaxed">Board Certified in Cardiovascular Disease and Interventional Cardiology</div>
-              </div>
-           </div>
-        </div>
-        <div className="bg-white p-10 rounded-[3rem] border border-slate-200 shadow-xl shadow-slate-200/5">
-           <h3 className="text-sm font-semibold text-slate-800 uppercase tracking-widest mb-8 flex items-center gap-3"><Settings size={20} className="text-blue-600" /> Administrative Role</h3>
-           <div className="space-y-6">
-              <div className="flex gap-5">
-                 <div className="w-1.5 h-1.5 rounded-full bg-orange-500 mt-2"></div>
-                 <div className="text-xs font-bold text-slate-600 leading-relaxed">Head of Cardiovascular Surgical Planning Committee</div>
-              </div>
-              <div className="flex gap-5">
-                 <div className="w-1.5 h-1.5 rounded-full bg-orange-500 mt-2"></div>
-                 <div className="text-xs font-bold text-slate-600 leading-relaxed">Director of Physician Portal Cardiology Residency Program</div>
-              </div>
-           </div>
-        </div>
       </div>
     </div>
   );

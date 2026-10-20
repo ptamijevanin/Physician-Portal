@@ -2,6 +2,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { ViewType, Patient, PatientCaseSummary } from '../types';
 import CaseHistorySelector from './CaseHistorySelector';
+import { physicianProfileService, PhysicianProfileState } from '../services/physicianProfileService';
 import { 
   LayoutDashboard, 
   CalendarDays, 
@@ -44,6 +45,7 @@ interface LayoutProps {
   selectedCaseNumber?: string;
   onCaseChange?: (caseNumber: string) => void;
   patientCases?: PatientCaseSummary[];
+  currentUser?: string | null;
 }
 
 const calculateAge = (dob: string) => {
@@ -90,6 +92,7 @@ const Layout: React.FC<LayoutProps> = ({
   selectedCaseNumber = '',
   onCaseChange,
   patientCases = [],
+  currentUser,
 }) => {
   const [isSidebarOpen, setIsSidebarOpen] = React.useState(true);
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
@@ -97,8 +100,13 @@ const Layout: React.FC<LayoutProps> = ({
   const [showSearchResults, setShowSearchResults] = useState(false);
   const [showPhysicianInfo, setShowPhysicianInfo] = useState(false);
   const [clinicalAlertsExpanded, setClinicalAlertsExpanded] = useState(false);
+  const [profile, setProfile] = useState<PhysicianProfileState>(() => physicianProfileService.getProfile());
   const searchRef = useRef<HTMLDivElement>(null);
   const physicianModalRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    return physicianProfileService.subscribe(setProfile);
+  }, []);
 
   const selectedCase =
     patientCases.find((c) => c.caseNumber === selectedCaseNumber) ||
@@ -239,8 +247,12 @@ const Layout: React.FC<LayoutProps> = ({
           <div className="flex items-center gap-2 sm:gap-4 shrink-0">
             <div className="flex items-center gap-2 sm:gap-4 sm:pl-4 sm:border-l sm:border-slate-200 relative">
               <div className="text-right hidden lg:block">
-                <div className="text-sm font-semibold text-slate-800 leading-none">Dr. Sarah Connor</div>
-                <div className="text-[10px] text-slate-500 font-medium uppercase tracking-widest mt-1.5">Consultant Cardiologist</div>
+                <div className="text-sm font-semibold text-slate-800 leading-none">
+                  {profile.physician?.fullName || currentUser || 'Dr. Sarah Connor'}
+                </div>
+                <div className="text-[10px] text-slate-500 font-medium uppercase tracking-widest mt-1.5 truncate max-w-[180px]">
+                  {profile.specialties[0]?.specialtyName || profile.physician?.title || 'Consultant Cardiologist'}
+                </div>
               </div>
               <button onClick={() => setShowPhysicianInfo(!showPhysicianInfo)} className="focus:outline-none transition-transform active:scale-95 group">
                 <img src="https://picsum.photos/seed/doc/100/100" className="w-9 h-9 rounded-xl border-2 border-white shadow-sm group-hover:border-blue-600 transition-all" alt="Doctor" />
@@ -251,8 +263,10 @@ const Layout: React.FC<LayoutProps> = ({
                     <div className="flex items-center gap-3">
                        <img src="https://picsum.photos/seed/doc/100/100" className="w-12 h-12 rounded-lg border border-white/20 shadow-md" alt="Dr Profile" />
                         <div>
-                          <h3 className="font-bold text-sm leading-tight">Dr. Sarah Connor</h3>
-                          <div className="text-blue-400 text-[8px] font-semibold uppercase tracking-widest mt-1">Chief of Cardiology</div>
+                          <h3 className="font-bold text-sm leading-tight">{profile.physician?.fullName || currentUser || 'Dr. Sarah Connor'}</h3>
+                          <div className="text-blue-400 text-[8px] font-semibold uppercase tracking-widest mt-1 truncate max-w-[170px]">
+                            {profile.specialties[0]?.specialtyName || profile.physician?.title || 'Chief of Cardiology'}
+                          </div>
                         </div>
                     </div>
                   </div>
@@ -260,11 +274,11 @@ const Layout: React.FC<LayoutProps> = ({
                     <div className="space-y-2">
                       <div className="flex items-center gap-3 text-slate-600 group">
                         <div className="p-1.5 bg-slate-50 rounded-lg group-hover:bg-blue-50 transition-colors"><Phone size={12} className="text-blue-600" /></div>
-                        <div className="flex flex-col"><span className="text-[8px] font-semibold text-slate-400 uppercase tracking-widest">Ext</span><span className="text-[11px] font-medium text-slate-800">+1 (555) 902-3412</span></div>
+                        <div className="flex flex-col"><span className="text-[8px] font-semibold text-slate-400 uppercase tracking-widest">Ext</span><span className="text-[11px] font-medium text-slate-800">{profile.physician?.extension || profile.physician?.phone || '+1 (555) 902-3412'}</span></div>
                       </div>
                       <div className="flex items-center gap-3 text-slate-600 group">
                         <div className="p-1.5 bg-slate-50 rounded-lg group-hover:bg-blue-50 transition-colors"><Mail size={12} className="text-blue-600" /></div>
-                        <div className="flex flex-col"><span className="text-[8px] font-semibold text-slate-400 uppercase tracking-widest">Email</span><span className="text-[11px] font-medium text-slate-800">s.connor@physicianportal.md</span></div>
+                        <div className="flex flex-col"><span className="text-[8px] font-semibold text-slate-400 uppercase tracking-widest">Email</span><span className="text-[11px] font-medium text-slate-800 truncate max-w-[170px]">{profile.physician?.email || 's.connor@physicianportal.md'}</span></div>
                       </div>
                     </div>
                     <div className="pt-2 space-y-2">
