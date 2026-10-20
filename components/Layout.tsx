@@ -2,6 +2,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { ViewType, Patient, PatientCaseSummary } from '../types';
 import CaseHistorySelector from './CaseHistorySelector';
+import { SapInstitution } from '../services/sapAuthService';
 import { physicianProfileService, PhysicianProfileState } from '../services/physicianProfileService';
 import { 
   LayoutDashboard, 
@@ -46,6 +47,8 @@ interface LayoutProps {
   onCaseChange?: (caseNumber: string) => void;
   patientCases?: PatientCaseSummary[];
   currentUser?: string | null;
+  selectedInstitution?: SapInstitution | null;
+  onChangeInstitution?: () => void;
 }
 
 const calculateAge = (dob: string) => {
@@ -93,6 +96,8 @@ const Layout: React.FC<LayoutProps> = ({
   onCaseChange,
   patientCases = [],
   currentUser,
+  selectedInstitution,
+  onChangeInstitution,
 }) => {
   const [isSidebarOpen, setIsSidebarOpen] = React.useState(true);
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
@@ -245,6 +250,16 @@ const Layout: React.FC<LayoutProps> = ({
           </div>
           
           <div className="flex items-center gap-2 sm:gap-4 shrink-0">
+            <button
+              type="button"
+              onClick={onChangeInstitution}
+              title={selectedInstitution?.name || 'Select institution'}
+              aria-label={`Change institution${selectedInstitution ? `: ${selectedInstitution.name}` : ''}`}
+              className="flex max-w-[42px] items-center gap-2 rounded-lg border border-slate-200 bg-white p-2 text-slate-600 hover:border-blue-200 hover:bg-blue-50 hover:text-blue-700 sm:max-w-[220px] sm:px-3"
+            >
+              <Building2 size={16} className="shrink-0" />
+              <span className="hidden truncate text-xs font-medium sm:block">{selectedInstitution?.name || 'Select institution'}</span>
+            </button>
             <div className="flex items-center gap-2 sm:gap-4 sm:pl-4 sm:border-l sm:border-slate-200 relative">
               <div className="text-right hidden lg:block">
                 <div className="text-sm font-semibold text-slate-800 leading-none">

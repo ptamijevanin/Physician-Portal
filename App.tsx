@@ -10,8 +10,10 @@ import AgendaView from './components/AgendaView';
 import Login from './components/Login';
 import PatientData from './components/PatientData';
 import ProfileView from './components/ProfileView';
-import { sapAuthService } from './services/sapAuthService';
+import { sapAuthService, SapInstitution } from './services/sapAuthService';
+import { institutionService } from './services/institutionService';
 import { physicianProfileService } from './services/physicianProfileService';
+import InstitutionSelectorModal from './components/InstitutionSelectorModal';
 import { Calendar, List, Info, ChevronRight, Activity, MapPin, Clock, Award, BookOpen, User, UserPlus, Search, Stethoscope, Mail, Phone, ExternalLink, HeartPulse, Settings, Bed, Filter, AlertCircle, CheckCircle, ArrowLeft } from 'lucide-react';
 
 const calculateAge = (dob: string) => {
@@ -32,6 +34,12 @@ const App: React.FC = () => {
     // displayName is for UI display only and may contain prefixes like "Dr.".
     return session ? session.username : null;
   });
+  const [selectedInstitution, setSelectedInstitution] = useState<SapInstitution | null>(() => sapAuthService.getSelectedInstitution());
+  const [institutions, setInstitutions] = useState<SapInstitution[]>([]);
+  const [institutionSelectorOpen, setInstitutionSelectorOpen] = useState(() => sapAuthService.isAuthenticated() && !sapAuthService.getSelectedInstitution());
+  const [institutionsLoading, setInstitutionsLoading] = useState(false);
+  const [institutionsError, setInstitutionsError] = useState<string | null>(null);
+  const [institutionRequestVersion, setInstitutionRequestVersion] = useState(0);
   const [activeView, setActiveView] = useState<ViewType>(ViewType.DASHBOARD);
   const [previousView, setPreviousView] = useState<ViewType>(ViewType.DASHBOARD);
   const [selectedPatient, setSelectedPatient] = useState<Patient | null>(MOCK_PATIENTS[0]);
@@ -51,16 +59,54 @@ const App: React.FC = () => {
 
   const handleLogin = (user: string) => { 
     setCurrentUser(user); 
+    setSelectedInstitution(sapAuthService.getSelectedInstitution());
     setIsAuthenticated(true);
+    setInstitutionSelectorOpen(!sapAuthService.getSelectedInstitution());
     // fetchProfile with no argument — it reads session.username internally,
     // which is the raw SAP user ID (e.g. "JOHN"), not the display name.
     physicianProfileService.fetchProfile();
   };
+  useEffect(() => {
+    if (!isAuthenticated) return;
+    const session = sapAuthService.getSession();
+    if (!session) return;
+
+    let active = true;
+    if (!sapAuthService.getSelectedInstitution()) setInstitutionSelectorOpen(true);
+    setInstitutionsLoading(true);
+    setInstitutionsError(null);
+    institutionService.fetchForUser(session.username)
+      .then((results) => {
+        if (active) setInstitutions(results);
+      })
+      .catch((error: unknown) => {
+        if (active) setInstitutionsError(error instanceof Error ? error.message : 'Unable to load institutions.');
+      })
+      .finally(() => {
+        if (active) setInstitutionsLoading(false);
+      });
+
+    return () => { active = false; };
+  }, [isAuthenticated, institutionRequestVersion]);
+
+  const handleInstitutionSelection = (institution: SapInstitution) => {
+    sapAuthService.setSelectedInstitution(institution);
+    setSelectedInstitution(institution);
+    setInstitutionSelectorOpen(false);
+  };
+
+  const openInstitutionSelector = () => {
+    setInstitutionSelectorOpen(true);
+    if (institutions.length === 0) setInstitutionRequestVersion((version) => version + 1);
+  };
+
   const handleLogout = () => { 
     sapAuthService.logout();
     physicianProfileService.clearProfile();
     setIsAuthenticated(false); 
     setCurrentUser(null); 
+    setSelectedInstitution(null);
+    setInstitutionSelectorOpen(false);
     setActiveView(ViewType.DASHBOARD); 
   };
 
@@ -246,20 +292,34 @@ const App: React.FC = () => {
   };
 
   return (
-    <Layout
-      activeView={activeView}
-      setView={setActiveView}
-      selectedPatient={selectedPatient}
-      setSelectedPatient={setSelectedPatient}
-      patients={MOCK_PATIENTS}
-      onLogout={handleLogout}
-      selectedCaseNumber={selectedCaseNumber}
-      onCaseChange={setSelectedCaseNumber}
-      patientCases={selectedPatient ? getPatientCases(selectedPatient) : []}
-      currentUser={currentUser}
-    >
-      {renderContent()}
-    </Layout>
+    <>
+      <Layout
+        activeView={activeView}
+        setView={setActiveView}
+        selectedPatient={selectedPatient}
+        setSelectedPatient={setSelectedPatient}
+        patients={MOCK_PATIENTS}
+        onLogout={handleLogout}
+        selectedCaseNumber={selectedCaseNumber}
+        onCaseChange={setSelectedCaseNumber}
+        patientCases={selectedPatient ? getPatientCases(selectedPatient) : []}
+        currentUser={currentUser}
+        selectedInstitution={selectedInstitution}
+        onChangeInstitution={openInstitutionSelector}
+      >
+        {renderContent()}
+      </Layout>
+      <InstitutionSelectorModal
+        isOpen={institutionSelectorOpen}
+        institutions={institutions}
+        selectedInstitution={selectedInstitution}
+        isLoading={institutionsLoading}
+        error={institutionsError}
+        onRetry={() => setInstitutionRequestVersion((version) => version + 1)}
+        onSelect={handleInstitutionSelection}
+        onClose={() => setInstitutionSelectorOpen(false)}
+      />
+    </>
   );
 };
 

@@ -8,12 +8,19 @@ export interface SapUserSession {
   username: string;
   displayName: string;
   basicAuthToken: string;
+  selectedInstitution?: SapInstitution;
   csrfToken?: string;
   endpoint: string;
   sapSystem?: string;
   sapClient?: string;
   authenticatedAt: string;
   isDemo?: boolean;
+}
+
+export interface SapInstitution {
+  id: string;
+  name: string;
+  details: Array<{ label: string; value: string }>;
 }
 
 export interface SapLoginResult {
@@ -111,6 +118,22 @@ class SapAuthService {
    */
   public isAuthenticated(): boolean {
     return !!this.getSession();
+  }
+
+  public getSelectedInstitution(): SapInstitution | null {
+    return this.getSession()?.selectedInstitution || null;
+  }
+
+  public setSelectedInstitution(institution: SapInstitution): void {
+    const session = this.getSession();
+    if (!session) return;
+
+    this.currentSession = { ...session, selectedInstitution: institution };
+    try {
+      sessionStorage.setItem(STORAGE_KEY, JSON.stringify(this.currentSession));
+    } catch (e) {
+      console.warn('Unable to persist selected institution', e);
+    }
   }
 
   /**
