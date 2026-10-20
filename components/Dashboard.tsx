@@ -2,6 +2,9 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import { MOCK_INPATIENT_LIST, CALENDAR_DATA, MOCK_PATIENTS } from '../constants';
 import { ViewType, Patient } from '../types';
+import { SapInstitution, sapAuthService } from '../services/sapAuthService';
+import { PhysicianProfileState, physicianProfileService } from '../services/physicianProfileService';
+import { OutpatientVisit, outpatientVisitService } from '../services/outpatientVisitService';
 import { 
   ChevronRight, Calendar as CalendarIcon, Bed, ShieldCheck, 
   MapPin, CheckCircle2, AlertCircle, Clock, CalendarDays, 
@@ -14,6 +17,7 @@ type DisplayMode = 'calendar' | 'list';
 interface DashboardProps {
   setView: (view: ViewType) => void;
   onPatientSelect: (patient: Patient) => void;
+  selectedInstitution: SapInstitution | null;
 }
 
 const calculateAge = (dob: string) => {
@@ -26,10 +30,30 @@ const calculateAge = (dob: string) => {
   return age;
 };
 
-const Dashboard: React.FC<DashboardProps> = ({ onPatientSelect }) => {
+const formatAgeLabel = (age: string | number | undefined): string => {
+  const value = String(age ?? '').trim();
+  return value ? `${value} yrs` : '';
+};
+
+const getStatusClassName = (status: string): string => {
+  const normalizedStatus = status.trim().toLowerCase();
+  if (normalizedStatus.includes('completed') || normalizedStatus.includes('attended')) {
+    return 'bg-emerald-50 text-emerald-600 border-emerald-100';
+  }
+  if (normalizedStatus.includes('confirmed') || normalizedStatus.includes('registered')) {
+    return 'bg-blue-50 text-blue-600 border-blue-100';
+  }
+  return 'bg-slate-50 text-slate-400 border-slate-100';
+};
+
+const Dashboard: React.FC<DashboardProps> = ({ onPatientSelect, selectedInstitution }) => {
   const [activeTab, setActiveTab] = useState<DashboardTab>('today');
   const [displayMode, setDisplayMode] = useState<DisplayMode>('list');
   const [time, setTime] = useState(new Date());
+  const [profileState, setProfileState] = useState<PhysicianProfileState>(() => physicianProfileService.getProfile());
+  const [outpatientVisits, setOutpatientVisits] = useState<OutpatientVisit[]>([]);
+  const [outpatientLoading, setOutpatientLoading] = useState(false);
+  const [outpatientError, setOutpatientError] = useState<string | null>(null);
   
   const todayStr = useMemo(() => new Date().toISOString().split('T')[0], []);
 
@@ -37,6 +61,46 @@ const Dashboard: React.FC<DashboardProps> = ({ onPatientSelect }) => {
     const timer = setInterval(() => setTime(new Date()), 1000);
     return () => clearInterval(timer);
   }, []);
+
+  useEffect(() => physicianProfileService.subscribe(setProfileState), []);
+
+  useEffect(() => {
+    const session = sapAuthService.getSession();
+    if (!session || session.isDemo || profileState.physician || profileState.isLoading || profileState.error) return;
+    void physicianProfileService.fetchProfile();
+  }, [profileState.physician, profileState.isLoading, profileState.error]);
+
+  useEffect(() => {
+    const session = sapAuthService.getSession();
+    if (!session || session.isDemo || !selectedInstitution || profileState.isLoading) return;
+    if (!profileState.physician && !profileState.error) return;
+
+    let active = true;
+    setOutpatientLoading(true);
+    setOutpatientError(null);
+    const physicianId = profileState.physician?.physicianId || session.username;
+
+    outpatientVisitService.fetchForPhysician(physicianId, selectedInstitution.id)
+      .then((visits) => {
+        if (active) setOutpatientVisits(visits);
+      })
+      .catch((error: unknown) => {
+        if (active) {
+          setOutpatientVisits([]);
+          setOutpatientError(error instanceof Error ? error.message : 'Unable to load outpatient visits.');
+        }
+      })
+      .finally(() => {
+        if (active) setOutpatientLoading(false);
+      });
+
+    return () => { active = false; };
+  }, [
+    selectedInstitution?.id,
+    profileState.physician?.physicianId,
+    profileState.isLoading,
+    profileState.error,
+  ]);
 
   const isPast = (timeStr: string) => {
     const [timeVal, period] = timeStr.split(' ');
@@ -55,7 +119,9 @@ const Dashboard: React.FC<DashboardProps> = ({ onPatientSelect }) => {
       case 'today':
         return CALENDAR_DATA.filter(apt => apt.date === todayStr && apt.status !== 'completed' && !isPast(apt.time));
       case 'outpatient':
-        return CALENDAR_DATA.filter(apt => apt.date === todayStr);
+        return sapAuthService.getSession()?.isDemo
+          ? CALENDAR_DATA.filter(apt => apt.date === todayStr)
+          : outpatientVisits.map((visit) => ({ ...visit, isSapVisit: true }));
       case 'noshow':
         return CALENDAR_DATA.filter(apt => apt.date === todayStr && apt.status !== 'completed' && isPast(apt.time));
       default:
@@ -70,8 +136,14 @@ const Dashboard: React.FC<DashboardProps> = ({ onPatientSelect }) => {
     const upcoming = dayData.filter(a => a.status !== 'completed' && !isPast(a.time)).length;
     const total = dayData.length;
     
-    return { upcoming, attended, noshow, total, inpatient: MOCK_INPATIENT_LIST.length };
-  }, [todayStr, time]);
+    return {
+      upcoming,
+      attended,
+      noshow,
+      total: sapAuthService.getSession()?.isDemo ? total : outpatientVisits.length,
+      inpatient: MOCK_INPATIENT_LIST.length,
+    };
+  }, [todayStr, time, outpatientVisits.length]);
 
   const handlePatientClick = (patientId: string) => {
     // Disable navigation for No Show and Upcoming Appointments as requested
@@ -144,8 +216,9 @@ const Dashboard: React.FC<DashboardProps> = ({ onPatientSelect }) => {
     );
   };
 
-  const getAppointmentStatusLabel = (apt: { status: string }, tab: DashboardTab) => {
+  const getAppointmentStatusLabel = (apt: { status: string; isSapVisit?: boolean }, tab: DashboardTab) => {
     if (tab === 'today' || tab === 'noshow') return 'Planned';
+    if (apt.isSapVisit) return apt.status;
     if (tab === 'outpatient') return apt.status === 'completed' ? 'Treatment Completed' : 'Registered';
     return apt.status;
   };
@@ -166,7 +239,9 @@ const Dashboard: React.FC<DashboardProps> = ({ onPatientSelect }) => {
 
     return (
       <div className="md:hidden divide-y divide-slate-100">
-        {data.map((apt) => (
+        {data.map((apt) => {
+          const ageLabel = formatAgeLabel(apt.isSapVisit ? apt.age : calculateAge(apt.patientDob));
+          return (
           <button
             key={apt.id}
             type="button"
@@ -182,13 +257,13 @@ const Dashboard: React.FC<DashboardProps> = ({ onPatientSelect }) => {
                 <div className="flex flex-wrap items-center gap-2 mt-1.5 text-[10px] font-medium text-slate-500">
                   <span className="inline-flex items-center gap-1">
                     <Clock size={11} className="text-slate-300" />
-                    {apt.date} • {apt.time}
+                    {apt.isSapVisit ? apt.dateTime : `${apt.date} • ${apt.time}`}
                   </span>
                   <span className="bg-slate-100 px-1.5 py-0.5 rounded text-slate-500">{apt.patientId}</span>
                 </div>
                 <div className="flex flex-wrap gap-2 mt-2 text-[10px] text-slate-500">
-                  <span>{calculateAge(apt.patientDob)} yrs</span>
-                  <span>•</span>
+                  {ageLabel && <span>{ageLabel}</span>}
+                  {ageLabel && <span>•</span>}
                   <span>{apt.patientGender}</span>
                   <span>•</span>
                   <span>{apt.patientDob}</span>
@@ -201,19 +276,14 @@ const Dashboard: React.FC<DashboardProps> = ({ onPatientSelect }) => {
                 </div>
               </div>
               <span
-                className={`shrink-0 px-2.5 py-1 rounded-md text-[8px] font-medium uppercase tracking-wider border ${
-                  apt.status === 'completed'
-                    ? 'bg-emerald-50 text-emerald-600 border-emerald-100'
-                    : apt.status === 'confirmed'
-                      ? 'bg-blue-50 text-blue-600 border-blue-100'
-                      : 'bg-slate-50 text-slate-400 border-slate-100'
-                }`}
+                className={`shrink-0 px-2.5 py-1 rounded-md text-[8px] font-medium uppercase tracking-wider border ${getStatusClassName(apt.status)}`}
               >
                 {getAppointmentStatusLabel(apt, activeTab)}
               </span>
             </div>
           </button>
-        ))}
+          );
+        })}
       </div>
     );
   };
@@ -241,7 +311,9 @@ const Dashboard: React.FC<DashboardProps> = ({ onPatientSelect }) => {
             </thead>
             <tbody className="divide-y divide-slate-50">
               {data.length > 0 ? (
-                data.map((apt) => (
+                data.map((apt) => {
+                  const ageLabel = formatAgeLabel(apt.isSapVisit ? apt.age : calculateAge(apt.patientDob));
+                  return (
                   <tr 
                     key={apt.id} 
                     onClick={() => handlePatientClick(apt.patientId)} 
@@ -250,7 +322,7 @@ const Dashboard: React.FC<DashboardProps> = ({ onPatientSelect }) => {
                     <td className="px-6 py-3 whitespace-nowrap">
                       <div className="flex items-center gap-2 text-[11px] font-medium text-slate-600">
                         <Clock size={12} className="text-slate-300" />
-                        <span>{apt.date} • {apt.time}</span>
+                        <span>{apt.isSapVisit ? apt.dateTime : `${apt.date} • ${apt.time}`}</span>
                       </div>
                     </td>
                     {activeTab !== 'today' && activeTab !== 'noshow' && (
@@ -271,21 +343,19 @@ const Dashboard: React.FC<DashboardProps> = ({ onPatientSelect }) => {
                       <span className="text-[10px] text-blue-500/70 font-medium">{apt.patientGender}</span>
                     </td>
                     <td className="px-6 py-3 text-center">
-                      <span className="text-[10px] text-slate-600 font-medium">{calculateAge(apt.patientDob)} yrs</span>
+                      {ageLabel && <span className="text-[10px] text-slate-600 font-medium">{ageLabel}</span>}
                     </td>
                     <td className="px-6 py-3 text-right">
-                      <span className={`px-3 py-0.5 rounded-md text-[8px] font-medium uppercase tracking-widest border ${
-                        apt.status === 'completed' ? 'bg-emerald-50 text-emerald-600 border-emerald-100' : 
-                        apt.status === 'confirmed' ? 'bg-blue-50 text-blue-600 border-blue-100' : 
-                        'bg-slate-50 text-slate-400 border-slate-100'
-                      }`}>
-                        {activeTab === 'today' || activeTab === 'noshow' ? 'Planned' : 
+                      <span className={`px-3 py-0.5 rounded-md text-[8px] font-medium uppercase tracking-widest border ${getStatusClassName(apt.status)}`}>
+                        {activeTab === 'today' || activeTab === 'noshow' ? 'Planned' :
+                         apt.isSapVisit ? apt.status :
                          activeTab === 'outpatient' ? (apt.status === 'completed' ? 'Treatment Completed' : 'Registered') :
                          apt.status}
                       </span>
                     </td>
                   </tr>
-                ))
+                  );
+                })
               ) : (
                 <tr>
                   <td colSpan={8} className="py-16 text-center">
@@ -562,7 +632,15 @@ const Dashboard: React.FC<DashboardProps> = ({ onPatientSelect }) => {
           )}
         </div>
         <div className="min-h-[280px] sm:min-h-[400px]">
-          {activeTab === 'inpatient' ? (
+          {activeTab === 'outpatient' && !sapAuthService.getSession()?.isDemo ? (
+            outpatientLoading ? (
+              <div className="py-16 text-center text-slate-400 text-sm">Loading outpatient visits from SAP...</div>
+            ) : outpatientError ? (
+              <div role="alert" className="m-6 rounded-lg border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
+                {outpatientError}
+              </div>
+            ) : renderList(getFilteredData(activeTab))
+          ) : activeTab === 'inpatient' ? (
               <>
               {renderMobileInpatientCards()}
               <div className="hidden md:block overflow-x-auto">

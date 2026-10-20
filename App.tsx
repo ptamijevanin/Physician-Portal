@@ -120,7 +120,7 @@ const App: React.FC = () => {
 
   const renderContent = () => {
     switch (activeView) {
-      case ViewType.DASHBOARD: return <Dashboard setView={setActiveView} onPatientSelect={handlePatientSelection} />;
+      case ViewType.DASHBOARD: return <Dashboard setView={setActiveView} onPatientSelect={handlePatientSelection} selectedInstitution={selectedInstitution} />;
       case ViewType.PATIENT_DATA: return selectedPatient ? (
         <PatientData
           patient={selectedPatient}
@@ -287,7 +287,7 @@ const App: React.FC = () => {
           </div>
         );
       }
-      default: return <Dashboard setView={setActiveView} onPatientSelect={handlePatientSelection} />;
+      default: return <Dashboard setView={setActiveView} onPatientSelect={handlePatientSelection} selectedInstitution={selectedInstitution} />;
     }
   };
 
