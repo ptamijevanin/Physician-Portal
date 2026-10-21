@@ -5,6 +5,7 @@ import { ViewType, Patient } from '../types';
 import { SapInstitution, sapAuthService } from '../services/sapAuthService';
 import { PhysicianProfileState, physicianProfileService } from '../services/physicianProfileService';
 import { OutpatientVisit, outpatientVisitService } from '../services/outpatientVisitService';
+import { InpatientVisit, inpatientVisitService } from '../services/inpatientVisitService';
 import { 
   ChevronRight, Calendar as CalendarIcon, Bed, ShieldCheck, 
   MapPin, CheckCircle2, AlertCircle, Clock, CalendarDays, 
@@ -54,6 +55,9 @@ const Dashboard: React.FC<DashboardProps> = ({ onPatientSelect, selectedInstitut
   const [outpatientVisits, setOutpatientVisits] = useState<OutpatientVisit[]>([]);
   const [outpatientLoading, setOutpatientLoading] = useState(false);
   const [outpatientError, setOutpatientError] = useState<string | null>(null);
+  const [inpatientVisits, setInpatientVisits] = useState<InpatientVisit[]>([]);
+  const [inpatientLoading, setInpatientLoading] = useState(false);
+  const [inpatientError, setInpatientError] = useState<string | null>(null);
   
   const todayStr = useMemo(() => new Date().toISOString().split('T')[0], []);
 
@@ -92,6 +96,38 @@ const Dashboard: React.FC<DashboardProps> = ({ onPatientSelect, selectedInstitut
       })
       .finally(() => {
         if (active) setOutpatientLoading(false);
+      });
+
+    return () => { active = false; };
+  }, [
+    selectedInstitution?.id,
+    profileState.physician?.physicianId,
+    profileState.isLoading,
+    profileState.error,
+  ]);
+
+  useEffect(() => {
+    const session = sapAuthService.getSession();
+    if (!session || session.isDemo || !selectedInstitution || profileState.isLoading) return;
+    if (!profileState.physician && !profileState.error) return;
+
+    let active = true;
+    setInpatientLoading(true);
+    setInpatientError(null);
+    const physicianId = profileState.physician?.physicianId || session.username;
+
+    inpatientVisitService.fetchForPhysician(physicianId, selectedInstitution.id)
+      .then((visits) => {
+        if (active) setInpatientVisits(visits);
+      })
+      .catch((error: unknown) => {
+        if (active) {
+          setInpatientVisits([]);
+          setInpatientError(error instanceof Error ? error.message : 'Unable to load inpatient visits.');
+        }
+      })
+      .finally(() => {
+        if (active) setInpatientLoading(false);
       });
 
     return () => { active = false; };
@@ -141,9 +177,9 @@ const Dashboard: React.FC<DashboardProps> = ({ onPatientSelect, selectedInstitut
       attended,
       noshow,
       total: sapAuthService.getSession()?.isDemo ? total : outpatientVisits.length,
-      inpatient: MOCK_INPATIENT_LIST.length,
+      inpatient: sapAuthService.getSession()?.isDemo ? MOCK_INPATIENT_LIST.length : inpatientVisits.length,
     };
-  }, [todayStr, time, outpatientVisits.length]);
+  }, [todayStr, time, outpatientVisits.length, inpatientVisits.length]);
 
   const handlePatientClick = (patientId: string) => {
     // Disable navigation for No Show and Upcoming Appointments as requested
@@ -495,9 +531,9 @@ const Dashboard: React.FC<DashboardProps> = ({ onPatientSelect, selectedInstitut
     }
   }, [activeTab]);
 
-  const renderMobileInpatientCards = () => (
+  const renderMobileInpatientCards = (visits: InpatientVisit[]) => (
     <div className="md:hidden divide-y divide-slate-100">
-      {MOCK_INPATIENT_LIST.map((item) => (
+      {visits.length > 0 ? visits.map((item) => (
         <button
           key={item.id}
           type="button"
@@ -506,22 +542,45 @@ const Dashboard: React.FC<DashboardProps> = ({ onPatientSelect, selectedInstitut
         >
           <div className="font-semibold text-slate-800 text-sm">{item.patientName}</div>
           <div className="text-[10px] text-slate-400 font-medium uppercase tracking-widest mt-1">
-            {item.patientId} • Age: {calculateAge(MOCK_PATIENTS.find((p) => p.id === item.patientId)?.dob || '')} yrs
+            {item.patientId}
+            {formatAgeLabel(item.age) && <> • Age: {formatAgeLabel(item.age)}</>}
           </div>
           <div className="flex items-center gap-2 mt-2 text-xs font-medium text-slate-600">
             <MapPin size={13} className="text-blue-500 shrink-0" />
-            <span>Room {item.room} • {item.nursingUnit}</span>
+            <span>{[
+              item.ward && `Ward: ${item.ward}`,
+              item.room && `Room: ${item.room}`,
+              item.bed && `Bed: ${item.bed}`,
+            ].filter(Boolean).join(' • ')}</span>
           </div>
           <div className="mt-2 text-xs text-slate-500 line-clamp-2">{item.diagnosis}</div>
           <div className="mt-3">
             <span className="text-[9px] font-semibold text-slate-600 bg-slate-50 px-2.5 py-1 rounded-md border border-slate-200/50">
-              Admitted {item.admissionDate}
+              Admitted {[item.admissionDate, item.admissionTime].filter(Boolean).join(' • ')}
             </span>
           </div>
         </button>
-      ))}
+      )) : (
+        <div className="py-12 px-4 text-center text-slate-400 text-sm">No inpatient visits found.</div>
+      )}
     </div>
   );
+
+  const isDemoSession = sapAuthService.getSession()?.isDemo === true;
+  const displayedInpatientVisits: InpatientVisit[] = isDemoSession
+    ? MOCK_INPATIENT_LIST.map((item) => ({
+        id: item.id,
+        patientId: item.patientId,
+        patientName: item.patientName,
+        age: String(calculateAge(MOCK_PATIENTS.find((patient) => patient.id === item.patientId)?.dob || '') || ''),
+        ward: item.nursingUnit,
+        room: item.room,
+        bed: '',
+        diagnosis: item.diagnosis,
+        admissionDate: item.admissionDate,
+        admissionTime: '',
+      }))
+    : inpatientVisits;
 
   return (
     <div className="space-y-4 sm:space-y-6 animate-in fade-in duration-500 max-w-full">
@@ -641,8 +700,15 @@ const Dashboard: React.FC<DashboardProps> = ({ onPatientSelect, selectedInstitut
               </div>
             ) : renderList(getFilteredData(activeTab))
           ) : activeTab === 'inpatient' ? (
+            inpatientLoading && !isDemoSession ? (
+              <div className="py-16 text-center text-slate-400 text-sm">Loading inpatient visits from SAP...</div>
+            ) : inpatientError && !isDemoSession ? (
+              <div role="alert" className="m-6 rounded-lg border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
+                {inpatientError}
+              </div>
+            ) : (
               <>
-              {renderMobileInpatientCards()}
+              {renderMobileInpatientCards(displayedInpatientVisits)}
               <div className="hidden md:block overflow-x-auto">
                   <table className="w-full text-left border-collapse min-w-[720px]">
                       <thead className="bg-slate-50/50 border-b border-slate-100">
@@ -654,36 +720,46 @@ const Dashboard: React.FC<DashboardProps> = ({ onPatientSelect, selectedInstitut
                       </tr>
                       </thead>
                       <tbody className="divide-y divide-slate-50">
-                      {MOCK_INPATIENT_LIST.map((item) => (
+                      {displayedInpatientVisits.length > 0 ? displayedInpatientVisits.map((item) => (
                           <tr key={item.id} onClick={() => handlePatientClick(item.patientId)} className="hover:bg-slate-50/80 transition-colors group cursor-pointer">
                           <td className="px-8 py-5">
                               <div>
                                 <div className="text-sm font-semibold text-slate-800 group-hover:text-blue-600 transition-colors">{item.patientName}</div>
                                 <div className="text-[10px] text-slate-400 font-medium uppercase tracking-widest mt-1 flex items-center gap-2">
                                     <span className="text-slate-500 font-semibold">{item.patientId}</span>
-                                    <span>•</span>
-                                    <span>Age: {calculateAge(MOCK_PATIENTS.find(p => p.id === item.patientId)?.dob || '')} yrs</span>
+                                    {formatAgeLabel(item.age) && <><span>•</span><span>Age: {formatAgeLabel(item.age)}</span></>}
                                 </div>
                               </div>
                           </td>
                           <td className="px-8 py-5">
                               <div className="flex items-center gap-2 text-xs font-bold text-slate-600">
                                 <MapPin size={14} className="text-blue-500" />
-                                <span>Room {item.room} • {item.nursingUnit}</span>
+                                <span>{[
+                                  item.ward && `Ward: ${item.ward}`,
+                                  item.room && `Room: ${item.room}`,
+                                  item.bed && `Bed: ${item.bed}`,
+                                ].filter(Boolean).join(' • ')}</span>
                               </div>
                           </td>
                           <td className="px-8 py-5">
                             <span className="text-xs font-medium text-slate-500 truncate max-w-[200px] block">{item.diagnosis}</span>
                           </td>
                           <td className="px-6 py-4 text-right">
-                            <span className="text-[9px] font-semibold text-slate-600 bg-slate-50 px-2.5 py-1 rounded-md border border-slate-200/50">{item.admissionDate}</span>
+                            <span className="text-[9px] font-semibold text-slate-600 bg-slate-50 px-2.5 py-1 rounded-md border border-slate-200/50">
+                              {[item.admissionDate, item.admissionTime].filter(Boolean).join(' • ')}
+                            </span>
                           </td>
                           </tr>
-                      ))}
+                      )) : (
+                        <tr>
+                          <td colSpan={4} className="py-16 text-center text-slate-400 text-sm">No inpatient visits found.</td>
+                        </tr>
+                      )}
                       </tbody>
                   </table>
               </div>
               </>
+            )
           ) : 
            displayMode === 'list' ? renderList(getFilteredData(activeTab)) : 
            renderTimelineView(getFilteredData(activeTab))
