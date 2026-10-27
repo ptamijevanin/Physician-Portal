@@ -7,7 +7,7 @@ export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), '');
   const odataBaseUrl = env.VITE_SAP_ODATA_BASE_URL;
 
-  let sapTarget = 'http://devisherp.laumcrh.com:8005';
+  let sapTarget = 'http://10.4.19.224:8005';
   try {
     sapTarget = new URL(odataBaseUrl).origin;
   } catch {
@@ -24,10 +24,11 @@ export default defineConfig(({ mode }) => {
           changeOrigin: true,
           rewrite: (path) => path.replace(/^\/api\/whisper/, ''),
         },
-        '/sap': {
+        '/sap-odata': {
           target: sapTarget,
           changeOrigin: true,
           secure: false,
+          rewrite: (requestPath) => requestPath.replace(/^\/sap-odata/, ''),
           configure: (proxy) => {
             proxy.on('proxyReq', (proxyReq, req) => {
               const method = (req.method || 'GET').toUpperCase();
@@ -51,6 +52,7 @@ export default defineConfig(({ mode }) => {
         },
       },
     },
+    base: '/Physician-Portal/',
     plugins: [react(), tailwindcss()],
     resolve: {
       alias: {

@@ -58,63 +58,6 @@ const ProfileView: React.FC = () => {
 
   return (
     <div className="max-w-5xl mx-auto space-y-8 animate-in fade-in duration-500 pb-12">
-      {/* SAP OData Live Integration Banner */}
-      <div className="bg-slate-900 border border-slate-800 rounded-3xl p-5 text-white flex flex-col md:flex-row items-start md:items-center justify-between gap-4 shadow-xl">
-        <div className="flex items-center gap-3.5">
-          <div className="w-10 h-10 rounded-2xl bg-blue-600/30 border border-blue-400/30 flex items-center justify-center text-blue-400 shrink-0">
-            <Database size={20} />
-          </div>
-          <div>
-            <div className="flex items-center gap-2">
-              <span className="text-xs font-bold uppercase tracking-wider text-slate-200">SAP NetWeaver CDS Live Profile</span>
-              <span className="inline-flex items-center gap-1 text-[9px] font-bold text-emerald-300 bg-emerald-500/20 px-2 py-0.5 rounded-full border border-emerald-500/30">
-                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
-                {sapSystem} / {sapClient}
-              </span>
-              {source === 'demo' && (
-                <span className="text-[9px] font-bold text-amber-300 bg-amber-500/20 px-2 py-0.5 rounded-full border border-amber-500/30">
-                  Demo Fallback
-                </span>
-              )}
-            </div>
-            <p className="text-[11px] text-slate-400 mt-0.5">
-              Populated from entities <span className="font-mono text-blue-300">xSMYxPHYSICIAN_CDS</span> &amp; <span className="font-mono text-blue-300">xSMYxPhysSpecialty</span>
-            </p>
-            {/* Relational Lookup Pipeline */}
-            <div className="flex flex-wrap items-center gap-1.5 pt-2 text-[10px]">
-              <span className="text-slate-400 font-medium">Pipeline:</span>
-              <span className="bg-slate-800 text-blue-300 px-2 py-0.5 rounded-md border border-slate-700 font-mono">
-                UserId: {physician?.userId || session?.username || 'N/A'}
-              </span>
-              <span className="text-slate-500 font-bold">&rarr;</span>
-              <span className="bg-slate-800 text-emerald-300 px-2 py-0.5 rounded-md border border-slate-700 font-mono">
-                Physician ID: {physician?.physicianId || 'N/A'}
-              </span>
-              <span className="text-slate-500 font-bold">&rarr;</span>
-              <span className="bg-slate-800 text-orange-300 px-2 py-0.5 rounded-md border border-slate-700 font-mono">
-                xSMYxPhysSpecialty: {specialties.length} Specialties
-              </span>
-            </div>
-          </div>
-        </div>
-
-        <div className="flex items-center gap-3 w-full md:w-auto justify-end">
-          {lastUpdated && (
-            <span className="text-[10px] text-slate-400 hidden lg:inline-block">
-              Synced: {new Date(lastUpdated).toLocaleTimeString()}
-            </span>
-          )}
-          <button
-            type="button"
-            onClick={handleRefresh}
-            disabled={isRefreshing || isLoading}
-            className="flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-xl text-xs font-semibold uppercase tracking-wider transition-all disabled:opacity-50 cursor-pointer shadow-md"
-          >
-            <RefreshCw size={14} className={isRefreshing || isLoading ? 'animate-spin' : ''} />
-            <span>{isRefreshing || isLoading ? 'Syncing...' : 'Sync from SAP'}</span>
-          </button>
-        </div>
-      </div>
 
       {/* Error alert if fetch failed */}
       {error && (
@@ -324,50 +267,6 @@ const ProfileView: React.FC = () => {
             )}
           </div>
         </div>
-      </div>
-
-      {/* Raw SAP OData Payload Inspector (Expandable) */}
-      <div className="bg-white rounded-3xl border border-slate-200 overflow-hidden shadow-sm">
-        <button
-          type="button"
-          onClick={() => setShowRawInspector(!showRawInspector)}
-          className="w-full px-6 py-4 flex items-center justify-between text-left hover:bg-slate-50 transition-colors cursor-pointer"
-        >
-          <div className="flex items-center gap-3">
-            <Code2 size={18} className="text-slate-500" />
-            <div>
-              <span className="text-xs font-bold uppercase tracking-wider text-slate-800">
-                Inspect Raw SAP CDS Entity Data
-              </span>
-              <p className="text-[10px] text-slate-400 font-mono mt-0.5">
-                View properties returned by xSMYxPHYSICIAN_CDS and xSMYxPhysSpecialty
-              </p>
-            </div>
-          </div>
-          {showRawInspector ? <ChevronUp size={18} className="text-slate-400" /> : <ChevronDown size={18} className="text-slate-400" />}
-        </button>
-
-        {showRawInspector && (
-          <div className="p-6 border-t border-slate-100 bg-slate-950 text-slate-200 font-mono text-xs overflow-x-auto space-y-6">
-            <div>
-              <div className="text-blue-400 font-bold text-[11px] mb-2 uppercase tracking-wider">
-                1. xSMYxPHYSICIAN_CDS Raw Record:
-              </div>
-              <pre className="bg-slate-900 p-4 rounded-xl border border-slate-800 overflow-x-auto text-[11px] leading-relaxed">
-                {JSON.stringify(physician?.raw || physician, null, 2)}
-              </pre>
-            </div>
-
-            <div>
-              <div className="text-blue-400 font-bold text-[11px] mb-2 uppercase tracking-wider">
-                2. xSMYxPhysSpecialty Raw Records:
-              </div>
-              <pre className="bg-slate-900 p-4 rounded-xl border border-slate-800 overflow-x-auto text-[11px] leading-relaxed">
-                {JSON.stringify(specialties.map(s => s.raw || s), null, 2)}
-              </pre>
-            </div>
-          </div>
-        )}
       </div>
     </div>
   );

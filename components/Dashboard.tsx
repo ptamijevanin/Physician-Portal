@@ -6,6 +6,7 @@ import { SapInstitution, sapAuthService } from '../services/sapAuthService';
 import { PhysicianProfileState, physicianProfileService } from '../services/physicianProfileService';
 import { OutpatientVisit, outpatientVisitService } from '../services/outpatientVisitService';
 import { InpatientVisit, inpatientVisitService } from '../services/inpatientVisitService';
+import { AppTimeSlot, appTimeSlotService } from '../services/appTimeSlotService';
 import { 
   ChevronRight, Calendar as CalendarIcon, Bed, ShieldCheck, 
   MapPin, CheckCircle2, AlertCircle, Clock, CalendarDays, 
@@ -38,11 +39,30 @@ const formatAgeLabel = (age: string | number | undefined): string => {
 
 const getStatusClassName = (status: string): string => {
   const normalizedStatus = status.trim().toLowerCase();
+  if (
+    normalizedStatus.includes('cancel') ||
+    normalizedStatus.includes('no show') ||
+    normalizedStatus.includes('no-show') ||
+    normalizedStatus.includes('noshow') ||
+    normalizedStatus.includes('reject')
+  ) {
+    return 'bg-rose-50 text-rose-600 border-rose-100';
+  }
   if (normalizedStatus.includes('completed') || normalizedStatus.includes('attended')) {
     return 'bg-emerald-50 text-emerald-600 border-emerald-100';
   }
-  if (normalizedStatus.includes('confirmed') || normalizedStatus.includes('registered')) {
+  if (
+    normalizedStatus.includes('confirmed') ||
+    normalizedStatus.includes('registered') ||
+    normalizedStatus.includes('scheduled') ||
+    normalizedStatus.includes('booked') ||
+    normalizedStatus.includes('planned') ||
+    normalizedStatus.includes('in queue')
+  ) {
     return 'bg-blue-50 text-blue-600 border-blue-100';
+  }
+  if (normalizedStatus.includes('pending') || normalizedStatus.includes('waiting')) {
+    return 'bg-amber-50 text-amber-600 border-amber-100';
   }
   return 'bg-slate-50 text-slate-400 border-slate-100';
 };
@@ -55,6 +75,9 @@ const Dashboard: React.FC<DashboardProps> = ({ onPatientSelect, selectedInstitut
   const [outpatientVisits, setOutpatientVisits] = useState<OutpatientVisit[]>([]);
   const [outpatientLoading, setOutpatientLoading] = useState(false);
   const [outpatientError, setOutpatientError] = useState<string | null>(null);
+  const [upcomingAppointments, setUpcomingAppointments] = useState<AppTimeSlot[]>([]);
+  const [upcomingLoading, setUpcomingLoading] = useState(false);
+  const [upcomingError, setUpcomingError] = useState<string | null>(null);
   const [inpatientVisits, setInpatientVisits] = useState<InpatientVisit[]>([]);
   const [inpatientLoading, setInpatientLoading] = useState(false);
   const [inpatientError, setInpatientError] = useState<string | null>(null);
@@ -112,6 +135,38 @@ const Dashboard: React.FC<DashboardProps> = ({ onPatientSelect, selectedInstitut
     if (!profileState.physician && !profileState.error) return;
 
     let active = true;
+    setUpcomingLoading(true);
+    setUpcomingError(null);
+    const physicianId = profileState.physician?.physicianId || session.username;
+
+    appTimeSlotService.fetchForPhysician(physicianId, selectedInstitution.id)
+      .then((appointments) => {
+        if (active) setUpcomingAppointments(appointments);
+      })
+      .catch((error: unknown) => {
+        if (active) {
+          setUpcomingAppointments([]);
+          setUpcomingError(error instanceof Error ? error.message : 'Unable to load upcoming appointments.');
+        }
+      })
+      .finally(() => {
+        if (active) setUpcomingLoading(false);
+      });
+
+    return () => { active = false; };
+  }, [
+    selectedInstitution?.id,
+    profileState.physician?.physicianId,
+    profileState.isLoading,
+    profileState.error,
+  ]);
+
+  useEffect(() => {
+    const session = sapAuthService.getSession();
+    if (!session || session.isDemo || !selectedInstitution || profileState.isLoading) return;
+    if (!profileState.physician && !profileState.error) return;
+
+    let active = true;
     setInpatientLoading(true);
     setInpatientError(null);
     const physicianId = profileState.physician?.physicianId || session.username;
@@ -153,7 +208,9 @@ const Dashboard: React.FC<DashboardProps> = ({ onPatientSelect, selectedInstitut
   const getFilteredData = (tab: DashboardTab) => {
     switch(tab) {
       case 'today':
-        return CALENDAR_DATA.filter(apt => apt.date === todayStr && apt.status !== 'completed' && !isPast(apt.time));
+        return sapAuthService.getSession()?.isDemo
+          ? CALENDAR_DATA.filter(apt => apt.date === todayStr && apt.status !== 'completed' && !isPast(apt.time))
+          : upcomingAppointments.map((appointment) => ({ ...appointment, isSapVisit: true }));
       case 'outpatient':
         return sapAuthService.getSession()?.isDemo
           ? CALENDAR_DATA.filter(apt => apt.date === todayStr)
@@ -169,7 +226,9 @@ const Dashboard: React.FC<DashboardProps> = ({ onPatientSelect, selectedInstitut
     const dayData = CALENDAR_DATA.filter(a => a.date === todayStr);
     const attended = dayData.filter(a => a.status === 'completed').length;
     const noshow = dayData.filter(a => a.status !== 'completed' && isPast(a.time)).length;
-    const upcoming = dayData.filter(a => a.status !== 'completed' && !isPast(a.time)).length;
+    const upcoming = sapAuthService.getSession()?.isDemo
+      ? dayData.filter(a => a.status !== 'completed' && !isPast(a.time)).length
+      : upcomingAppointments.length;
     const total = dayData.length;
     
     return {
@@ -179,7 +238,7 @@ const Dashboard: React.FC<DashboardProps> = ({ onPatientSelect, selectedInstitut
       total: sapAuthService.getSession()?.isDemo ? total : outpatientVisits.length,
       inpatient: sapAuthService.getSession()?.isDemo ? MOCK_INPATIENT_LIST.length : inpatientVisits.length,
     };
-  }, [todayStr, time, outpatientVisits.length, inpatientVisits.length]);
+  }, [todayStr, time, outpatientVisits.length, inpatientVisits.length, upcomingAppointments.length]);
 
   const handlePatientClick = (patientId: string) => {
     // Disable navigation for No Show and Upcoming Appointments as requested
@@ -253,7 +312,7 @@ const Dashboard: React.FC<DashboardProps> = ({ onPatientSelect, selectedInstitut
   };
 
   const getAppointmentStatusLabel = (apt: { status: string; isSapVisit?: boolean }, tab: DashboardTab) => {
-    if (tab === 'today' || tab === 'noshow') return 'Planned';
+    if ((tab === 'today' && !apt.isSapVisit) || tab === 'noshow') return 'Planned';
     if (apt.isSapVisit) return apt.status;
     if (tab === 'outpatient') return apt.status === 'completed' ? 'Treatment Completed' : 'Registered';
     return apt.status;
@@ -383,7 +442,7 @@ const Dashboard: React.FC<DashboardProps> = ({ onPatientSelect, selectedInstitut
                     </td>
                     <td className="px-6 py-3 text-right">
                       <span className={`px-3 py-0.5 rounded-md text-[8px] font-medium uppercase tracking-widest border ${getStatusClassName(apt.status)}`}>
-                        {activeTab === 'today' || activeTab === 'noshow' ? 'Planned' :
+                        {(activeTab === 'today' && !apt.isSapVisit) || activeTab === 'noshow' ? 'Planned' :
                          apt.isSapVisit ? apt.status :
                          activeTab === 'outpatient' ? (apt.status === 'completed' ? 'Treatment Completed' : 'Registered') :
                          apt.status}
@@ -691,7 +750,15 @@ const Dashboard: React.FC<DashboardProps> = ({ onPatientSelect, selectedInstitut
           )}
         </div>
         <div className="min-h-[280px] sm:min-h-[400px]">
-          {activeTab === 'outpatient' && !sapAuthService.getSession()?.isDemo ? (
+          {activeTab === 'today' && !isDemoSession ? (
+            upcomingLoading ? (
+              <div className="py-16 text-center text-slate-400 text-sm">Loading upcoming appointments from SAP...</div>
+            ) : upcomingError ? (
+              <div role="alert" className="m-6 rounded-lg border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
+                {upcomingError}
+              </div>
+            ) : renderList(getFilteredData(activeTab))
+          ) : activeTab === 'outpatient' && !sapAuthService.getSession()?.isDemo ? (
             outpatientLoading ? (
               <div className="py-16 text-center text-slate-400 text-sm">Loading outpatient visits from SAP...</div>
             ) : outpatientError ? (
