@@ -37,6 +37,58 @@ const formatAgeLabel = (age: string | number | undefined): string => {
   return value ? `${value} yrs` : '';
 };
 
+const getAppointmentTimestamp = (appointment: {
+  date?: string;
+  time?: string;
+  dateTime?: string;
+  admissionDate?: string;
+  admissionTime?: string;
+}): number => {
+  const date = appointment.date || appointment.admissionDate || appointment.dateTime?.match(/^(\d{4}-\d{2}-\d{2})/)?.[1];
+  const time = appointment.time || appointment.admissionTime ||
+    appointment.dateTime?.replace(/^\d{4}-\d{2}-\d{2}\s*/, '').replace('•', '').trim();
+  if (!date || !time) return Number.NaN;
+
+  const dateMatch = date.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  const timeMatch = time.match(/^(\d{1,2}):(\d{2})(?::\d{2})?\s*(AM|PM)?$/i);
+  if (!dateMatch || !timeMatch) return Number.NaN;
+
+  let hour = Number(timeMatch[1]);
+  const minute = Number(timeMatch[2]);
+  const period = timeMatch[3]?.toUpperCase();
+  if (minute > 59 || (period && (hour < 1 || hour > 12)) || (!period && hour > 23)) return Number.NaN;
+  if (period === 'PM' && hour !== 12) hour += 12;
+  if (period === 'AM' && hour === 12) hour = 0;
+
+  const [, year, month, day] = dateMatch;
+  const timestamp = new Date(Number(year), Number(month) - 1, Number(day), hour, minute).getTime();
+  const parsedDate = new Date(timestamp);
+  if (
+    parsedDate.getFullYear() !== Number(year) ||
+    parsedDate.getMonth() !== Number(month) - 1 ||
+    parsedDate.getDate() !== Number(day)
+  ) return Number.NaN;
+
+  return timestamp;
+};
+
+const sortAppointmentsByDateTime = <T extends {
+  date?: string;
+  time?: string;
+  dateTime?: string;
+  admissionDate?: string;
+  admissionTime?: string;
+}>(
+  appointments: T[],
+  ascending: boolean,
+): T[] => [...appointments].sort((first, second) => {
+  const firstTime = getAppointmentTimestamp(first);
+  const secondTime = getAppointmentTimestamp(second);
+  if (Number.isNaN(firstTime)) return Number.isNaN(secondTime) ? 0 : 1;
+  if (Number.isNaN(secondTime)) return -1;
+  return ascending ? firstTime - secondTime : secondTime - firstTime;
+});
+
 const getStatusClassName = (status: string): string => {
   const normalizedStatus = status.trim().toLowerCase();
   if (
@@ -205,18 +257,53 @@ const Dashboard: React.FC<DashboardProps> = ({ onPatientSelect, selectedInstitut
     return false;
   };
 
+  const isPlannedAppointmentOverdue = (dateTime: string, status: string): boolean => {
+    if (status.trim().toLowerCase() !== 'planned') return false;
+
+    const match = dateTime.match(/^(\d{4})-(\d{2})-(\d{2})\s+(\d{1,2}):(\d{2})\s*(AM|PM)$/i);
+    if (!match) return false;
+
+    const [, year, month, day, hourValue, minuteValue, period] = match;
+    let hour = Number(hourValue);
+    const minute = Number(minuteValue);
+    if (hour < 1 || hour > 12 || minute > 59) return false;
+    if (period.toUpperCase() === 'PM' && hour !== 12) hour += 12;
+    if (period.toUpperCase() === 'AM' && hour === 12) hour = 0;
+
+    const appointmentTime = new Date(Number(year), Number(month) - 1, Number(day), hour, minute);
+    if (
+      appointmentTime.getFullYear() !== Number(year) ||
+      appointmentTime.getMonth() !== Number(month) - 1 ||
+      appointmentTime.getDate() !== Number(day)
+    ) return false;
+
+    return time.getTime() - appointmentTime.getTime() >= 60 * 60 * 1000;
+  };
+
   const getFilteredData = (tab: DashboardTab) => {
     switch(tab) {
       case 'today':
         return sapAuthService.getSession()?.isDemo
-          ? CALENDAR_DATA.filter(apt => apt.date === todayStr && apt.status !== 'completed' && !isPast(apt.time))
-          : upcomingAppointments.map((appointment) => ({ ...appointment, isSapVisit: true }));
+          ? sortAppointmentsByDateTime(
+            CALENDAR_DATA.filter(apt => apt.date === todayStr && apt.status !== 'completed' && !isPast(apt.time)),
+            true,
+          )
+          : sortAppointmentsByDateTime(upcomingAppointments
+            .filter((appointment) => !isPlannedAppointmentOverdue(appointment.dateTime, appointment.status))
+            .map((appointment) => ({ ...appointment, isSapVisit: true })), true);
       case 'outpatient':
         return sapAuthService.getSession()?.isDemo
-          ? CALENDAR_DATA.filter(apt => apt.date === todayStr)
-          : outpatientVisits.map((visit) => ({ ...visit, isSapVisit: true }));
+          ? sortAppointmentsByDateTime(CALENDAR_DATA.filter(apt => apt.date === todayStr), false)
+          : sortAppointmentsByDateTime(outpatientVisits.map((visit) => ({ ...visit, isSapVisit: true })), false);
       case 'noshow':
-        return CALENDAR_DATA.filter(apt => apt.date === todayStr && apt.status !== 'completed' && isPast(apt.time));
+        return sapAuthService.getSession()?.isDemo
+          ? sortAppointmentsByDateTime(
+            CALENDAR_DATA.filter(apt => apt.date === todayStr && apt.status !== 'completed' && isPast(apt.time)),
+            false,
+          )
+          : sortAppointmentsByDateTime(upcomingAppointments
+            .filter((appointment) => isPlannedAppointmentOverdue(appointment.dateTime, appointment.status))
+            .map((appointment) => ({ ...appointment, isSapVisit: true })), false);
       default:
         return [];
     }
@@ -225,10 +312,16 @@ const Dashboard: React.FC<DashboardProps> = ({ onPatientSelect, selectedInstitut
   const stats = useMemo(() => {
     const dayData = CALENDAR_DATA.filter(a => a.date === todayStr);
     const attended = dayData.filter(a => a.status === 'completed').length;
-    const noshow = dayData.filter(a => a.status !== 'completed' && isPast(a.time)).length;
+    const noshow = sapAuthService.getSession()?.isDemo
+      ? dayData.filter(a => a.status !== 'completed' && isPast(a.time)).length
+      : upcomingAppointments.filter((appointment) =>
+        isPlannedAppointmentOverdue(appointment.dateTime, appointment.status),
+      ).length;
     const upcoming = sapAuthService.getSession()?.isDemo
       ? dayData.filter(a => a.status !== 'completed' && !isPast(a.time)).length
-      : upcomingAppointments.length;
+      : upcomingAppointments.filter((appointment) =>
+        !isPlannedAppointmentOverdue(appointment.dateTime, appointment.status),
+      ).length;
     const total = dayData.length;
     
     return {
@@ -626,8 +719,9 @@ const Dashboard: React.FC<DashboardProps> = ({ onPatientSelect, selectedInstitut
   );
 
   const isDemoSession = sapAuthService.getSession()?.isDemo === true;
-  const displayedInpatientVisits: InpatientVisit[] = isDemoSession
-    ? MOCK_INPATIENT_LIST.map((item) => ({
+  const displayedInpatientVisits: InpatientVisit[] = sortAppointmentsByDateTime(
+    isDemoSession
+      ? MOCK_INPATIENT_LIST.map((item) => ({
         id: item.id,
         patientId: item.patientId,
         patientName: item.patientName,
@@ -639,7 +733,9 @@ const Dashboard: React.FC<DashboardProps> = ({ onPatientSelect, selectedInstitut
         admissionDate: item.admissionDate,
         admissionTime: '',
       }))
-    : inpatientVisits;
+      : inpatientVisits,
+    false,
+  );
 
   return (
     <div className="space-y-4 sm:space-y-6 animate-in fade-in duration-500 max-w-full">
@@ -750,9 +846,11 @@ const Dashboard: React.FC<DashboardProps> = ({ onPatientSelect, selectedInstitut
           )}
         </div>
         <div className="min-h-[280px] sm:min-h-[400px]">
-          {activeTab === 'today' && !isDemoSession ? (
+          {(activeTab === 'today' || activeTab === 'noshow') && !isDemoSession ? (
             upcomingLoading ? (
-              <div className="py-16 text-center text-slate-400 text-sm">Loading upcoming appointments from SAP...</div>
+              <div className="py-16 text-center text-slate-400 text-sm">
+                Loading {activeTab === 'today' ? 'upcoming appointments' : 'no-show appointments'} from SAP...
+              </div>
             ) : upcomingError ? (
               <div role="alert" className="m-6 rounded-lg border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
                 {upcomingError}
