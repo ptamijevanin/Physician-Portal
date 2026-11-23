@@ -128,7 +128,7 @@ const App: React.FC = () => {
           onBack={() => setActiveView(previousView)}
         />
       ) : null;
-      case ViewType.AGENDA: return <AgendaView onPatientSelect={handlePatientSelection} />;
+      case ViewType.AGENDA: return <AgendaView onPatientSelect={handlePatientSelection} selectedInstitution={selectedInstitution} />;
       case ViewType.DOCTORS: return <DoctorsView doctors={MOCK_DOCTORS} />;
       case ViewType.PROFILE: return <ProfileView />;
       case ViewType.MY_PATIENTS: {

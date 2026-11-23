@@ -84,10 +84,14 @@ export const outpatientVisitService = {
     if (!physicianId.trim() || !institutionId.trim()) {
       throw new Error('A physician and institution are required to load outpatient visits.');
     }
+    const now = new Date();
+
+    const bwidt = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}T00:00:00`;
 
     const filter = [
       `Physicianid eq '${escapeODataValue(physicianId.trim())}'`,
       `Einri eq '${escapeODataValue(institutionId.trim())}'`,
+      `Bwidt eq datetime'${escapeODataValue(bwidt)}'`,
     ].join(' and ');
     const response = await sapAuthService.fetchOData(
       `PhysOPVisitSet?$filter=${encodeURIComponent(filter)}&$format=json&sap-client=${session.sapClient || '110'}`,

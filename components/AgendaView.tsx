@@ -1,8 +1,11 @@
 
 import React, { useState, useMemo, useEffect } from 'react';
 import { ChevronLeft, ChevronRight, Calendar as CalendarIcon, Clock, Users, List, LayoutGrid, Plus, X, Ban, Trash2 } from 'lucide-react';
-import { CALENDAR_DATA, MOCK_PATIENTS } from '../constants';
+import { MOCK_PATIENTS } from '../constants';
 import { AgendaTimeBlock, CalendarAppointment, Patient } from '../types';
+import { appTimeSlotService } from '../services/appTimeSlotService';
+import { SapInstitution, sapAuthService } from '../services/sapAuthService';
+import { PhysicianProfileState, physicianProfileService } from '../services/physicianProfileService';
 
 const APPOINTMENT_TYPES = [
   'Cardiac Follow-up',
@@ -58,6 +61,7 @@ type DisplayMode = 'calendar' | 'list';
 
 interface AgendaViewProps {
   onPatientSelect: (patient: Patient) => void;
+  selectedInstitution: SapInstitution | null;
 }
 
 const calculateAge = (dob: string) => {
@@ -101,17 +105,86 @@ const defaultBlockForm = (date: Date): NewBlockForm => ({
   reason: '',
 });
 
-const AgendaView: React.FC<AgendaViewProps> = ({ onPatientSelect }) => {
+const AgendaView: React.FC<AgendaViewProps> = ({ onPatientSelect, selectedInstitution }) => {
   const [currentDate, setCurrentDate] = useState(new Date());
   const [viewMode, setViewMode] = useState<ViewMode>('month');
   const [displayMode, setDisplayMode] = useState<DisplayMode>('calendar');
-  const [appointments, setAppointments] = useState<CalendarAppointment[]>(() => [...CALENDAR_DATA]);
+  const [appointments, setAppointments] = useState<CalendarAppointment[]>([]);
+  const [appointmentsLoading, setAppointmentsLoading] = useState(false);
+  const [appointmentsError, setAppointmentsError] = useState<string | null>(null);
+  const [profileState, setProfileState] = useState<PhysicianProfileState>(() => physicianProfileService.getProfile());
   const [blockedPeriods, setBlockedPeriods] = useState<AgendaTimeBlock[]>([]);
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [showBlockModal, setShowBlockModal] = useState(false);
   const [newAppointment, setNewAppointment] = useState<NewAppointmentForm>(() => defaultAppointmentForm(new Date(), []));
   const [newBlock, setNewBlock] = useState<NewBlockForm>(() => defaultBlockForm(new Date()));
   const [blockFormError, setBlockFormError] = useState('');
+
+  useEffect(() => physicianProfileService.subscribe(setProfileState), []);
+
+  useEffect(() => {
+    const session = sapAuthService.getSession();
+    if (!session || session.isDemo || profileState.physician || profileState.isLoading || profileState.error) return;
+    void physicianProfileService.fetchProfile();
+  }, [profileState.physician, profileState.isLoading, profileState.error]);
+
+  useEffect(() => {
+    const session = sapAuthService.getSession();
+    if (!session || session.isDemo || !selectedInstitution || profileState.isLoading) return;
+    if (!profileState.physician && !profileState.error) return;
+
+    const year = currentDate.getFullYear();
+    const month = currentDate.getMonth();
+    const formatDate = (date: Date, time: string) =>
+      `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}T${time}`;
+    const startDate = viewMode === 'month'
+      ? formatDate(new Date(year, month, 1), '00:00:00')
+      : formatDate(currentDate, '00:00:00');
+    const endDate = viewMode === 'month'
+      ? formatDate(new Date(year, month + 1, 0), '23:59:59')
+      : formatDate(currentDate, '23:59:59');
+
+    let active = true;
+    setAppointmentsLoading(true);
+    setAppointmentsError(null);
+    const physicianId = profileState.physician?.physicianId || session.username;
+
+    appTimeSlotService.fetchForPhysician(physicianId, selectedInstitution.id, { startDate, endDate })
+      .then((slots) => {
+        if (active) {
+          setAppointments(slots.map((slot) => ({
+            id: slot.id,
+            patientId: slot.patientId,
+            patientName: slot.patientName,
+            patientDob: slot.patientDob,
+            patientGender: slot.patientGender,
+            caseNumber: slot.patientId,
+            date: slot.date,
+            time: slot.time,
+            type: 'Appointment',
+            status: slot.status,
+          })));
+        }
+      })
+      .catch((error: unknown) => {
+        if (active) {
+          setAppointments([]);
+          setAppointmentsError(error instanceof Error ? error.message : 'Unable to load appointments.');
+        }
+      })
+      .finally(() => {
+        if (active) setAppointmentsLoading(false);
+      });
+
+    return () => { active = false; };
+  }, [
+    selectedInstitution?.id,
+    currentDate,
+    viewMode,
+    profileState.physician?.physicianId,
+    profileState.isLoading,
+    profileState.error,
+  ]);
 
   useEffect(() => {
     const media = window.matchMedia('(max-width: 767px)');
@@ -585,7 +658,9 @@ const AgendaView: React.FC<AgendaViewProps> = ({ onPatientSelect }) => {
             <h2 className="text-xl sm:text-2xl md:text-3xl font-semibold text-slate-800 tracking-tight uppercase">Clinical Agenda</h2>
             <div className="inline-flex items-center gap-2 text-slate-500 bg-slate-50 px-3 py-1.5 rounded-full border border-slate-100 mt-2">
               <Users size={14} />
-              <span className="text-[10px] font-semibold uppercase tracking-widest">{filteredData.length} Bookings</span>
+              <span className="text-[10px] font-semibold uppercase tracking-widest">
+                {appointmentsLoading ? 'Loading appointments' : `${filteredData.length} Bookings`}
+              </span>
               {filteredBlocks.length > 0 && (
                 <>
                   <span className="w-1 h-1 rounded-full bg-slate-300" />
@@ -647,6 +722,9 @@ const AgendaView: React.FC<AgendaViewProps> = ({ onPatientSelect }) => {
               ))}
             </div>
           </div>
+          {appointmentsError && (
+            <p role="alert" className="text-sm text-rose-600">{appointmentsError}</p>
+          )}
         </div>
       </div>
 

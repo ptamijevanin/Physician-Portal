@@ -3,6 +3,8 @@ import { sapAuthService } from './sapAuthService';
 export interface AppTimeSlot {
   id: string;
   dateTime: string;
+  date: string;
+  time: string;
   patientId: string;
   patientName: string;
   patientDob: string;
@@ -100,28 +102,46 @@ const formatSapTime = (value: string): string => {
 const escapeODataValue = (value: string): string => value.replace(/'/g, "''");
 
 export const appTimeSlotService = {
-  async fetchForPhysician(physicianId: string, institutionId: string): Promise<AppTimeSlot[]> {
+  async fetchForPhysician(
+    physicianId: string,
+    institutionId: string,
+    dateRange?: { startDate: string; endDate: string },
+  ): Promise<AppTimeSlot[]> {
     const session = sapAuthService.getSession();
     if (!session) throw new Error('Your SAP session has expired. Please sign in again.');
     if (!physicianId.trim() || !institutionId.trim()) {
-      throw new Error('A physician and institution are required to load upcoming appointments.');
+      throw new Error('A physician and institution are required to load appointments.');
     }
+    const now = new Date();
+
+    const formatDate = (date: Date, time: string): string => {
+      const year = date.getFullYear();
+      const month = String(date.getMonth() + 1).padStart(2, '0');
+      const day = String(date.getDate()).padStart(2, '0');
+
+      return `${year}-${month}-${day}T${time}`;
+    };
+
+    const startDate = dateRange?.startDate || formatDate(now, '00:00:00');
+    const endDate = dateRange?.endDate || formatDate(now, '23:59:59');
 
     const filter = [
       `Pernr eq '${escapeODataValue(physicianId.trim())}'`,
       `Einri eq '${escapeODataValue(institutionId.trim())}'`,
+      `Tmndt ge datetime'${escapeODataValue(startDate)}'`,
+      `Tmndt le datetime'${escapeODataValue(endDate)}'`,
     ].join(' and ');
     const response = await sapAuthService.fetchOData(
       `AppTimeSlotSet?$filter=${encodeURIComponent(filter)}&$expand=toPatDetailsSet&$format=json&sap-client=${session.sapClient || '110'}`,
     );
 
     if (!response.ok) {
-      throw new Error(`Unable to load upcoming appointments from SAP (HTTP ${response.status}).`);
+      throw new Error(`Unable to load appointments from SAP (HTTP ${response.status}).`);
     }
 
     const payload: unknown = await response.json();
     if (payload && typeof payload === 'object' && 'error' in payload) {
-      throw new Error('SAP returned an error while loading upcoming appointments.');
+      throw new Error('SAP returned an error while loading appointments.');
     }
 
     return getRecordList(payload).map((record, index) => {
@@ -132,6 +152,8 @@ export const appTimeSlotService = {
       return {
         id: `${getField(record, 'Patnr') || getField(patientDetails, 'Patnr')}-${date}-${time}-${index}`,
         dateTime: [date, time].filter(Boolean).join(' '),
+        date,
+        time,
         patientId: getField(patientDetails, 'Patnr') || getField(record, 'Patnr'),
         patientName: getField(patientDetails, 'PatName') || getField(record, 'PatName'),
         patientDob: formatSapDate(getField(patientDetails, 'Birthdt') || getField(record, 'Birthdt')),
