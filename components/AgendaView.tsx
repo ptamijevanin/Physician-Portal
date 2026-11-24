@@ -36,6 +36,15 @@ const parseTimeSlot = (slot: string) => {
   return hour;
 };
 
+const getHourOfDay = (time: string): number | null => {
+  const match = time.match(/^(\d{1,2}):\d{2}\s*(AM|PM)$/i);
+  if (!match) return null;
+
+  const hour = Number(match[1]);
+  if (hour < 1 || hour > 12) return null;
+  return (hour % 12) + (match[2].toUpperCase() === 'PM' ? 12 : 0);
+};
+
 const isSlotInBlock = (date: string, time: string, block: AgendaTimeBlock) => {
   if (block.date !== date) return false;
   const slotHour = parseTimeSlot(time);
@@ -489,7 +498,7 @@ const AgendaView: React.FC<AgendaViewProps> = ({ onPatientSelect, selectedInstit
         <div className="divide-y divide-slate-100">
           {BUSINESS_HOURS.map((hour) => {
             const fullTimeStr = formatHourSlot(hour);
-            const appointmentsAtHour = filteredData.filter((apt) => apt.time === fullTimeStr);
+            const appointmentsAtHour = filteredData.filter((apt) => getHourOfDay(apt.time) === hour);
             const block = getBlockForSlot(targetDateStr, fullTimeStr, blockedPeriods);
             
             return (

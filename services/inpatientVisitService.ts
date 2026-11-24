@@ -2,8 +2,11 @@ import { sapAuthService } from './sapAuthService';
 
 export interface InpatientVisit {
   id: string;
+  caseNumber: string;
   patientId: string;
   patientName: string;
+  patientDob: string;
+  patientGender: string;
   age: string;
   ward: string;
   room: string;
@@ -106,14 +109,18 @@ export const inpatientVisitService = {
     }
 
     return getRecordList(payload).map((record, index) => {
+      const caseNumber = getField(record, 'Falnr');
       const patientId = getField(record, 'Patnr');
       const admissionDate = formatSapDate(getField(record, 'Admissiondate'));
       const admissionTime = formatSapTime(getField(record, 'Admissiontime'));
 
       return {
-        id: `${patientId}-${admissionDate}-${admissionTime}-${index}`,
+        id: `${caseNumber}-${patientId}-${admissionDate}-${admissionTime}-${index}`,
+        caseNumber,
         patientId,
         patientName: getField(record, 'PatName'),
+        patientDob: formatSapDate(getField(record, 'Birthdt')),
+        patientGender: getField(record, 'Gender'),
         age: getField(record, 'Age'),
         ward: getField(record, 'Ward'),
         room: getField(record, 'Room'),

@@ -13,8 +13,20 @@ import ProfileView from './components/ProfileView';
 import { sapAuthService, SapInstitution } from './services/sapAuthService';
 import { institutionService } from './services/institutionService';
 import { physicianProfileService } from './services/physicianProfileService';
+import { InpatientVisit, inpatientVisitService } from './services/inpatientVisitService';
+import { OutpatientVisit, outpatientVisitService } from './services/outpatientVisitService';
 import InstitutionSelectorModal from './components/InstitutionSelectorModal';
 import { Calendar, List, Info, ChevronRight, Activity, MapPin, Clock, Award, BookOpen, User, UserPlus, Search, Stethoscope, Mail, Phone, ExternalLink, HeartPulse, Settings, Bed, Filter, AlertCircle, CheckCircle, ArrowLeft } from 'lucide-react';
+
+type ActivePatientRecord = Patient & {
+  recordId: string;
+  caseType: 'Inpatient' | 'Outpatient';
+  diagnosis: string;
+  location: string;
+  visitDateTime?: string;
+  status?: string;
+  displayAge?: string;
+};
 
 const calculateAge = (dob: string) => {
   if (!dob) return '';
@@ -25,6 +37,28 @@ const calculateAge = (dob: string) => {
   if (m < 0 || (m === 0 && today.getDate() < birthDate.getDate())) age--;
   return age;
 };
+
+const normalizeGender = (gender: string): Patient['gender'] => {
+  const normalizedGender = gender.trim().toLowerCase();
+  if (normalizedGender === 'male') return 'Male';
+  if (normalizedGender === 'female') return 'Female';
+  return 'Other';
+};
+
+const createVisitPatient = (
+  visit: InpatientVisit | OutpatientVisit,
+): Patient => ({
+  id: visit.patientId,
+  name: visit.patientName || visit.patientId,
+  dob: 'patientDob' in visit ? visit.patientDob : '',
+  gender: normalizeGender('patientGender' in visit ? visit.patientGender : ''),
+  bloodType: 'N/A',
+  allergies: [],
+  riskFactors: [],
+  lastVisit: 'admissionDate' in visit ? visit.admissionDate : visit.dateTime,
+  caseNumber: visit.caseNumber,
+  age: Number.parseInt(visit.age, 10) || undefined,
+});
 
 const App: React.FC = () => {
   const [isAuthenticated, setIsAuthenticated] = useState(() => sapAuthService.isAuthenticated());
@@ -46,8 +80,14 @@ const App: React.FC = () => {
   const [selectedCaseNumber, setSelectedCaseNumber] = useState(() =>
     getDefaultCaseNumber(MOCK_PATIENTS[0]),
   );
-  
+  const [profileState, setProfileState] = useState(() => physicianProfileService.getProfile());
+  const [inpatientVisits, setInpatientVisits] = useState<InpatientVisit[]>([]);
+  const [outpatientVisits, setOutpatientVisits] = useState<OutpatientVisit[]>([]);
+  const [activePatientsLoading, setActivePatientsLoading] = useState(false);
+  const [activePatientsErrors, setActivePatientsErrors] = useState<string[]>([]);
   const [patientFilter, setPatientFilter] = useState<'All' | 'Inpatient' | 'Outpatient'>('All');
+
+  useEffect(() => physicianProfileService.subscribe(setProfileState), []);
 
   useEffect(() => {
     if (selectedPatient) {
@@ -55,7 +95,63 @@ const App: React.FC = () => {
     } else {
       setSelectedCaseNumber('');
     }
-  }, [selectedPatient?.id]);
+  }, [selectedPatient?.id, selectedPatient?.caseNumber]);
+
+  useEffect(() => {
+    const session = sapAuthService.getSession();
+    if (
+      activeView !== ViewType.MY_PATIENTS ||
+      !isAuthenticated ||
+      !session ||
+      session.isDemo ||
+      !selectedInstitution ||
+      profileState.isLoading
+    ) return;
+    if (!profileState.physician && !profileState.error) return;
+
+    let active = true;
+    setActivePatientsLoading(true);
+    setActivePatientsErrors([]);
+    const physicianId = profileState.physician?.physicianId || session.username;
+
+    Promise.allSettled([
+      inpatientVisitService.fetchForPhysician(physicianId, selectedInstitution.id),
+      outpatientVisitService.fetchForPhysician(physicianId, selectedInstitution.id),
+    ]).then(([inpatientResult, outpatientResult]) => {
+      if (!active) return;
+
+      const errors: string[] = [];
+      if (inpatientResult.status === 'fulfilled') {
+        setInpatientVisits(inpatientResult.value);
+      } else {
+        setInpatientVisits([]);
+        errors.push(inpatientResult.reason instanceof Error
+          ? inpatientResult.reason.message
+          : 'Unable to load inpatient visits.');
+      }
+
+      if (outpatientResult.status === 'fulfilled') {
+        setOutpatientVisits(outpatientResult.value);
+      } else {
+        setOutpatientVisits([]);
+        errors.push(outpatientResult.reason instanceof Error
+          ? outpatientResult.reason.message
+          : 'Unable to load outpatient visits.');
+      }
+      setActivePatientsErrors(errors);
+    }).finally(() => {
+      if (active) setActivePatientsLoading(false);
+    });
+
+    return () => { active = false; };
+  }, [
+    activeView,
+    isAuthenticated,
+    selectedInstitution?.id,
+    profileState.physician?.physicianId,
+    profileState.isLoading,
+    profileState.error,
+  ]);
 
   const handleLogin = (user: string) => { 
     setCurrentUser(user); 
@@ -132,27 +228,54 @@ const App: React.FC = () => {
       case ViewType.DOCTORS: return <DoctorsView doctors={MOCK_DOCTORS} />;
       case ViewType.PROFILE: return <ProfileView />;
       case ViewType.MY_PATIENTS: {
-        const activePatients = MOCK_PATIENTS.map(p => {
-            const inpatient = MOCK_INPATIENT_LIST.find(ip => ip.patientId === p.id);
-            const patientEncounters = MOCK_ENCOUNTERS[p.id] || [];
-            
-            // Collect all unique diagnoses
-            const allDiagnoses = new Set<string>();
-            if (inpatient) allDiagnoses.add(inpatient.diagnosis);
-            patientEncounters.forEach(e => allDiagnoses.add(e.diagnosis));
-            
-            const diagnosisStr = allDiagnoses.size > 0 
-              ? Array.from(allDiagnoses).join(', ') 
-              : 'Routine Checkup';
+        const session = sapAuthService.getSession();
+        const isLiveSapSession = !!session && !session.isDemo;
+        const activePatients: ActivePatientRecord[] = isLiveSapSession
+          ? [
+              ...inpatientVisits.map((visit) => ({
+                ...createVisitPatient(visit),
+                recordId: visit.id,
+                caseNumber: visit.caseNumber,
+                caseType: 'Inpatient' as const,
+                diagnosis: visit.diagnosis || '—',
+                location: [
+                  visit.ward && `Ward: ${visit.ward}`,
+                  visit.room && `Room ${visit.room}`,
+                  visit.bed && `Bed ${visit.bed}`,
+                ].filter(Boolean).join(' · ') || 'Inpatient',
+                visitDateTime: [visit.admissionDate, visit.admissionTime].filter(Boolean).join(' · '),
+                displayAge: visit.age ? `${visit.age}Y` : undefined,
+              })),
+              ...outpatientVisits.map((visit) => ({
+                ...createVisitPatient(visit),
+                recordId: visit.id,
+                caseNumber: visit.caseNumber,
+                caseType: 'Outpatient' as const,
+                diagnosis: visit.diagnosis || '—',
+                location: 'Outpatient Clinic',
+                visitDateTime: visit.dateTime,
+                status: visit.status,
+                displayAge: visit.age ? `${visit.age}Y` : undefined,
+              })),
+            ].filter((patient) => patientFilter === 'All' || patient.caseType === patientFilter)
+          : MOCK_PATIENTS.map((patient) => {
+              const inpatient = MOCK_INPATIENT_LIST.find((item) => item.patientId === patient.id);
+              const patientEncounters = MOCK_ENCOUNTERS[patient.id] || [];
+              const allDiagnoses = new Set<string>();
+              if (inpatient) allDiagnoses.add(inpatient.diagnosis);
+              patientEncounters.forEach((encounter) => allDiagnoses.add(encounter.diagnosis));
 
-            return {
-                ...p,
+              return {
+                ...patient,
+                recordId: patient.id,
                 caseNumber: inpatient ? inpatient.id : (patientEncounters[0]?.caseNumber || '2000000000'),
-                caseType: inpatient ? 'Inpatient' : 'Outpatient',
-                diagnosis: diagnosisStr,
-                location: inpatient ? `Ward: ${inpatient.nursingUnit} (Room ${inpatient.room})` : 'Clinic Cardiology'
-            };
-        }).filter(p => patientFilter === 'All' || p.caseType === patientFilter);
+                caseType: inpatient ? 'Inpatient' as const : 'Outpatient' as const,
+                diagnosis: allDiagnoses.size > 0 ? Array.from(allDiagnoses).join(', ') : 'Routine Checkup',
+                location: inpatient ? `Ward: ${inpatient.nursingUnit} (Room ${inpatient.room})` : 'Clinic Cardiology',
+              };
+            }).filter((patient) => patientFilter === 'All' || patient.caseType === patientFilter);
+        const waitingForProfile = isLiveSapSession && !!selectedInstitution &&
+          (profileState.isLoading || (!profileState.physician && !profileState.error));
 
         return (
           <div className="space-y-4 sm:space-y-6 animate-in fade-in duration-500 max-w-full">
@@ -177,10 +300,17 @@ const App: React.FC = () => {
               </div>
             </div>
 
+            {(activePatientsLoading || waitingForProfile) && (
+              <p role="status" className="text-sm text-slate-500">Loading active patient visits...</p>
+            )}
+            {activePatientsErrors.map((error, index) => (
+              <p key={`${index}-${error}`} role="alert" className="text-sm text-rose-600">{error}</p>
+            ))}
+
             <div className="md:hidden bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden divide-y divide-slate-100">
               {activePatients.length > 0 ? activePatients.map(p => (
                 <button
-                  key={p.id}
+                  key={p.recordId}
                   type="button"
                   onClick={() => handlePatientSelection(p)}
                   className="w-full text-left p-4 hover:bg-blue-50/50 active:bg-blue-50 transition-colors"
@@ -195,14 +325,21 @@ const App: React.FC = () => {
                         <ChevronRight size={16} className="text-slate-300 shrink-0 mt-0.5" />
                       </div>
                       <div className="text-[9px] text-slate-400 font-semibold uppercase tracking-widest mt-1">
-                        {p.id} • DOB {p.dob} • {calculateAge(p.dob)}Y
+                        {p.id}{p.dob && ` • DOB ${p.dob}`}{(p.displayAge || p.dob) && ` • ${p.displayAge || `${calculateAge(p.dob)}Y`}`}
                       </div>
                       <div className="flex flex-wrap items-center gap-2 mt-2">
-                        <span className="text-[10px] font-bold text-slate-700 font-mono">{p.caseNumber}</span>
+                        <span className="text-[10px] font-bold text-slate-700 font-mono">{p.caseNumber || '—'}</span>
                         <span className={`text-[8px] font-bold uppercase px-2 py-0.5 rounded border ${p.caseType === 'Inpatient' ? 'bg-orange-100 text-orange-600 border-orange-200' : 'bg-blue-100 text-blue-600 border-blue-200'}`}>
                           {p.caseType}
                         </span>
+                        {p.status && <span className="text-[9px] text-slate-500">{p.status}</span>}
                       </div>
+                      {p.visitDateTime && (
+                        <div className="flex items-center gap-1 mt-2 text-[10px] text-slate-500">
+                          <Clock size={11} className="text-slate-300" />
+                          {p.visitDateTime}
+                        </div>
+                      )}
                       <div className="flex items-start gap-2 mt-2 text-[10px] text-slate-600">
                         <MapPin size={12} className="text-slate-300 shrink-0 mt-0.5" />
                         <span className="font-medium uppercase tracking-wider">{p.location}</span>
@@ -234,7 +371,7 @@ const App: React.FC = () => {
                   </thead>
                   <tbody className="divide-y divide-slate-100">
                     {activePatients.map(p => (
-                      <tr key={p.id} onClick={() => handlePatientSelection(p)} className="hover:bg-blue-50/50 transition-colors cursor-pointer group">
+                      <tr key={p.recordId} onClick={() => handlePatientSelection(p)} className="hover:bg-blue-50/50 transition-colors cursor-pointer group">
                         <td className="px-6 py-4">
                           <div className="flex items-center gap-3">
                             <div className={`p-2 rounded-lg ${p.caseType === 'Inpatient' ? 'bg-orange-50 text-orange-600' : 'bg-blue-50 text-blue-600'}`}>
@@ -243,13 +380,14 @@ const App: React.FC = () => {
                             <div>
                               <div className="text-sm font-bold text-slate-800 group-hover:text-blue-600 transition-colors">{p.name}</div>
                               <div className="text-[9px] text-slate-400 font-semibold uppercase tracking-widest mt-0.5">
-                                ID: {p.id} • DOB: {p.dob} • {calculateAge(p.dob)}Y
+                                ID: {p.id}{p.dob && ` • DOB: ${p.dob}`}{(p.displayAge || p.dob) && ` • ${p.displayAge || `${calculateAge(p.dob)}Y`}`}
+                                {p.visitDateTime && <span className="block mt-1">{p.visitDateTime}</span>}
                               </div>
                             </div>
                           </div>
                         </td>
                         <td className="px-6 py-4">
-                          <span className="text-[11px] font-bold text-slate-700 font-mono">{p.caseNumber}</span>
+                          <span className="text-[11px] font-bold text-slate-700 font-mono">{p.caseNumber || '—'}</span>
                         </td>
                         <td className="px-6 py-4">
                           <div className="flex items-center gap-2">
@@ -265,6 +403,7 @@ const App: React.FC = () => {
                         <td className="px-6 py-4">
                           <div className="text-[11px] font-medium text-slate-600 max-w-[300px]">
                             {p.diagnosis}
+                            {p.status && <div className="text-[9px] text-slate-400 mt-1">{p.status}</div>}
                           </div>
                         </td>
                         <td className="px-6 py-4 text-right">

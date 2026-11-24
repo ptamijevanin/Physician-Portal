@@ -723,8 +723,11 @@ const Dashboard: React.FC<DashboardProps> = ({ onPatientSelect, selectedInstitut
     isDemoSession
       ? MOCK_INPATIENT_LIST.map((item) => ({
         id: item.id,
+        caseNumber: item.id,
         patientId: item.patientId,
         patientName: item.patientName,
+        patientDob: MOCK_PATIENTS.find((patient) => patient.id === item.patientId)?.dob || '',
+        patientGender: MOCK_PATIENTS.find((patient) => patient.id === item.patientId)?.gender || 'Other',
         age: String(calculateAge(MOCK_PATIENTS.find((patient) => patient.id === item.patientId)?.dob || '') || ''),
         ward: item.nursingUnit,
         room: item.room,

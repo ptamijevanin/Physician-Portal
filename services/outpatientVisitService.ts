@@ -10,6 +10,7 @@ export interface OutpatientVisit {
   patientGender: string;
   age: string;
   status: string;
+  diagnosis: string;
 }
 
 const getRecordList = (payload: unknown): Array<Record<string, unknown>> => {
@@ -122,6 +123,7 @@ export const outpatientVisitService = {
         patientGender: getField(record, 'Gender'),
         age: getField(record, 'Age'),
         status: getField(record, 'Statutext'),
+        diagnosis: getField(record, 'OrgDesc'),
       };
     });
   },
